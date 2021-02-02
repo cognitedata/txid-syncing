@@ -4,7 +4,7 @@
 -- "stable" prevents this function from being used in an expression index, which it
 -- shouldn't be, while letting Postgres sufficiently inline it. It's trivially
 -- leakproof and parallel safe
-create or replace function txid_offset() returns bigint immutable leakproof parallel safe language sql as $$ select 0::bigint $$;
+create or replace function txid_offset() returns bigint stable leakproof parallel safe language sql as $$ select 0::bigint $$;
 
 -- Adjusted for pgdumps/restores to different clusters, what's the current txid?
 create or replace function adjusted_txid_current() returns bigint language sql as $$ select txid_offset() + txid_current() $$;
@@ -46,14 +46,14 @@ begin
 
     -- Update the function to the determined necessary offset. It can only be set higher
     if new_txid_offset > txid_offset() then
-        execute 'create or replace function public.txid_offset() returns bigint immutable leakproof parallel safe language sql as $func$ select (' || new_txid_offset || ')::bigint $func$';
+        execute 'create or replace function public.txid_offset() returns bigint stable leakproof parallel safe language sql as $func$ select (' || new_txid_offset || ')::bigint $func$';
     end if;
     return new_txid_offset;
 end; $$;
 
 
 create or replace function adjusted_txid_snapshot() returns record
-stable leakproof parallel safe language sql as $$
+stable leakproof language sql as $$
     select 
         (select coalesce(array_agg(txid), ARRAY[]::bigint[]) from (select txid_offset() + txid_snapshot_xip(txid_current_snapshot())) as _(txid)) as xip_list,
         (select txid_offset() + txid_snapshot_xmin(txid_current_snapshot())) as xmin,
@@ -63,7 +63,7 @@ $$;
 
 
 create or replace function adjusted_txid_snapshot_as_json() returns json
-stable leakproof parallel safe language sql as $$
+stable leakproof language sql as $$
     select to_json(adjusted_txid_snapshot());
 $$;
 
