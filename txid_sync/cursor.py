@@ -130,7 +130,7 @@ class Cursor:
                         -- We need to wrap this in a subquery to be able to
                         -- order and limit prior to the union all
                         select 0, last_modified_txid, id from version_info
-                        where last_modified_txid = 1 and id > 1
+                        where last_modified_txid = 1 /* xid_at */ and id > 1000 /* xid_at_id */
                         order by id asc
                         limit 101
                     ) as _0(priority, last_modified_txid, id)
@@ -141,7 +141,7 @@ class Cursor:
                 
                 select * from (
                     select 1, last_modified_txid, id from version_info
-                    where last_modified_txid = ANY(ARRAY[2])
+                    where last_modified_txid = ANY(ARRAY[2] /* xip list */)
                     order by last_modified_txid asc, id asc
                     limit 101
                 ) as _2(priority, last_modified_txid, id)
@@ -150,7 +150,7 @@ class Cursor:
                 
                 select * from (
                     select 2, last_modified_txid, id from version_info
-                    where last_modified_txid > 3
+                    where last_modified_txid >= 3 /* xid_next */
                     order by last_modified_txid asc, id asc
                     limit 101
                 ) as _5(priority, last_modified_txid, id)
@@ -164,6 +164,7 @@ class Cursor:
                 -- We order OUTSIDE of the UNION-level, or Postgres would need to fully execute
                 -- all of the lower-priority SELECTs to produce a total order
                 order by priority asc, last_modified_txid asc, id asc
+                limit 101
         )
         select * from changes;
 
@@ -335,10 +336,11 @@ with changes as (
                 xid_next = xid_at + 1
                 cursor_type = 'partial'
             else:
-                # The first item of the next batch has a higher version than the last item of this batch, so
+                # The first item of the next batch has a different version than the last item of this batch, so
                 # we know we're done with everything for that version. Thus, we can continue based on version
-                # progress.
-                assert last_of_this_batch['last_modified_txid'] < peek_at_next_batch['last_modified_txid']
+                # progress. While different, it's not necessarily lower, as last_of_this_batch
+                # may come from a partial scroll, and the first of the next batch can be sourced from a
+                # xip list.
                 xid_next = peek_at_next_batch['last_modified_txid']
                 cursor_type = 'scroll'
 
