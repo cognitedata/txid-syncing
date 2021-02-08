@@ -38,8 +38,8 @@ class Cursor:
     - Where to continue from, `xid_next`. If everything committed in order and if a transaction couldn't
     change more than batch_size objects, this would be all we'd need. 
     - Since a transaction can change more objects than we can fit in batch, if `xid_at` is set, then so
-    must `xid_at_seq`. When set, it means we couldn't know if we finished everything that changed within
-    a particular transaction, so we need to proceed from `xid_at_seq`. ("seq" here is a tiebreaker within
+    must `xid_at_id`. When set, it means we couldn't know if we finished everything that changed within
+    a particular transaction, so we need to proceed from `xid_at_id`. ("seq" here is a tiebreaker within
     a version of which there is only one. This could for example by the (surrogate) id of the row) If
     `xid_at` is set, then `xid_next` will be `xid_at + 1`.
     - Now able to handle more changes than `batch_size` within a single transaction, if transactions always
@@ -53,11 +53,11 @@ class Cursor:
 
     A cursor might have a mix of all three cases, and the priority in which we deal with them is as follows:
 
-    1. `xid_at` and `xid_at_seq`, e.g. (1234, 10000) meaning that within tx 1234, we got to the 10000th row, and
+    1. `xid_at` and `xid_at_id`, e.g. (1234, 1000) meaning that within tx 1234, we got to the row with id 1000, and
     since we can't know how many more got touched within the same tx, we continue there.
     2. When `xip_list` isn't empty, we then query for transactions that were still in progress when `xid_next`
     progressed past them. We proceed in ascending order. If we can't know whether we saw all the changes of a
-    now-commited xip, it'll turn into case (1), with `xid_at` and `xid_at_seq` provided.
+    now-commited xip, it'll turn into case (1), with `xid_at` and `xid_at_id` provided.
     3. If we know we're done with everything within an `xid_at` and everything from a past xip, then we can proceed
     with a simple case of looking for changes whose `txid >= xid_next`.
 
@@ -74,7 +74,8 @@ class Cursor:
     """
 
     # xip_list is Postgres lingo for "list of transactions in progress", and "xid" transaction id.
-    def __init__(self, batch_size, xid_at=None, xid_at_seq=None, xip_list=None, xid_next=None,
+    def __init__(self, batch_size, xid_at=None, xid_at_id=None, xip_list=None, xid_next=None,
+                partition_id=0, number_of_partitions=1,
                 # XXX: Short term hack. Raw SQL should not be in the cursor, or the key 
                 # really needs to be treated as a key. Instead, they should contain filters from
                 # the query DSL that the property graph will handle            
@@ -83,7 +84,7 @@ class Cursor:
                 previous=None, type=None):
         self.batch_size = batch_size
         self.xid_at = xid_at
-        self.xid_at_seq = xid_at_seq
+        self.xid_at_id = xid_at_id
         self.xip_list = xip_list or []
         self.xid_next = xid_next
 
@@ -190,11 +191,11 @@ class Cursor:
         additional_froms = ("\n" + "\n".join(self.additional_froms)) if self.additional_froms else ""
         additional_wheres = ("and \n({})\n".format(") and \n(\n".join(self.additional_wheres))) if self.additional_wheres else ""
 
-        params = dict(txid=self.xid_at, id=self.xid_at_seq, xip_list=self.xip_list, xid_next=self.xid_next,
+        params = dict(txid=self.xid_at, id=self.xid_at_id, xip_list=self.xip_list, xid_next=self.xid_next,
                 batch_size=batch_plus_one, additional_wheres=additional_wheres, additional_froms=additional_froms
         )
 
-        if self.xid_at_seq is not None:
+        if self.xid_at_id is not None:
             # Where we left off, we were unable to fit everything in the version
             # within the batch, and we _know_ there is more since we peek at the would-be
             # next item so we continue from xid_at_node_id. This gets the higher priority,
@@ -274,7 +275,7 @@ with changes as (
             type(self).__name__,
             ', '.join(
                 '{}={}'.format(key, getattr(self, key))
-                for key in ('batch_size', 'xid_at', 'xid_at_seq', 'xip_list', 'xid_next', 'type')
+                for key in ('batch_size', 'xid_at', 'xid_at_id', 'xip_list', 'xid_next', 'type', 'number_of_partitions', 'partition_id')
                 if getattr(self, key) is not None
             )
         )
@@ -286,10 +287,14 @@ with changes as (
             xid_next = self.xid_next + 1
             xip_list = [xip for xip in snapshot["xip_list"] if xip < xid_next]
             cursor_type = 'empty'
-            return type(self)(new_batch_size or self.batch_size, xid_next=xid_next, xip_list=xip_list, previous=self, type=cursor_type)
+            return type(self)(
+                new_batch_size or self.batch_size, xid_next=xid_next, xip_list=xip_list,
+                partition_id=self.partition_id, number_of_partitions=self.number_of_partitions,
+                previous=self, type=cursor_type
+            )
 
         xid_at = None
-        xid_at_seq = None
+        xid_at_id = None
         cursor_type = None
 
         # We know we have rows, or we would've returned earlier
@@ -312,7 +317,7 @@ with changes as (
             if last_of_this_batch['last_modified_txid'] == peek_at_next_batch['last_modified_txid']:
                 # Their txids are the same, so we need to continue plowing through things on the same 
                 # txid. We continue based on seq-progress within a version
-                xid_at_seq = last_of_this_batch['id']
+                xid_at_id = last_of_this_batch['id']
                 xid_at = last_of_this_batch['last_modified_txid']
                 # All we know here is that the end of this batch is not all that's on the same version.
                 # We might be going through what was an XIP that committed and changed a lot, so we
@@ -357,7 +362,7 @@ with changes as (
         self._previous = None # or we'd memleak as we'd keep the chain forever
         return type(self)(
             self.batch_size, xid_next=xid_next, xip_list=xip_list,
-            xid_at=xid_at, xid_at_seq=xid_at_seq,
+            xid_at=xid_at, xid_at_id=xid_at_id,
             additional_froms=self.additional_froms, additional_wheres=self.additional_wheres,
             type=cursor_type, previous=self)
 
@@ -371,7 +376,7 @@ class CursorSchema(Schema):
 
     # If provided, then we're not done with everything at xid_at, but scrolling through
     # I.e we couldn't fit everything within batch size
-    xid_at_seq = fields.Integer(allow_none=True)
+    xid_at_id = fields.Integer(allow_none=True)
 
     # If provided, then there are transacions less than xid_next that we need to do
     # when we're done with xid_at, and before we go to xid_next.
@@ -388,8 +393,8 @@ class CursorSchema(Schema):
         if not 1 <= data['batch_size'] <= 10000:
             raise ValidationError("'batch_size' must be [1, 10000]")
 
-        if data['xid_at'] and not(data.get('xid_next') and data.get('xid_at_seq')):
-            raise ValidationError("if xid_at is provided, both xid_next and xid_at_seq must be provided too")
+        if data['xid_at'] and not(data.get('xid_next') and data.get('xid_at_id')):
+            raise ValidationError("if xid_at is provided, both xid_next and xid_at_id must be provided too")
 
     @marshmallow.post_load
     def make_token(self, data, **kw):
