@@ -31,4 +31,5 @@ before it has persisted its progress) This is expected, and the consistency chec
 - If you read load-generator first, you'll see the kind of things we're trying to make sure we can sync.
 - consistency-check.py is pretty trivial too
 - Then, sync.py might be worth checking, as it puts context around how the cursor is used.
-- txid_sync.cursor has most of the interesting logic, though. (It's kept free of async code so it can easily be used in sync Python code too. It needs tests, for now we just have the concurrency fuzzing that is the load-generator + consistency-check)
+- txid_sync/cursor.py and its test has most of the interesting logic, though. (It's kept free of async code so it can easily be used in sync Python code too.) Note that the load generator and the consistency checker are the most important tests, the unit test is quite basic, but explains some scenarios step by step.
+- 01-txid-utils.sql has the necessary Postgres supporting logic
