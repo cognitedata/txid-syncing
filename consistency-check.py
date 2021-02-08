@@ -8,21 +8,11 @@ to sanity check what the syncing process has done, especially after subjecting
 it to the load generator for a while.
 """
 
-import os
+import os, sys
 import psycopg2
+import sqlite3
 import elasticsearch
 from elasticsearch.helpers import scan
-
-es = elasticsearch.Elasticsearch()
-
-es_view = {}
-
-i = 0
-for row in scan(es, {"query": {"exists": {"field": "doc_version"}}, "fields": ["doc_version", "txid"], "_source": False}, index="some-index", size=10*1000):
-    es_view[row["_id"]] = row["fields"]["txid"][0], row["fields"]["doc_version"][0]
-    i += 1
-    if not (i % 100000):
-        print(i)
 
 pg_view = {}
 
@@ -33,11 +23,43 @@ with conn.cursor() as cur:
     for row in cur:
         external_id, txid, version = row
         pg_view[external_id] = txid, version
+conn.close()
 
-diff = sorted(set(pg_view.items()) ^ set(es_view.items()))
 
-if diff:
-    print("🔥 There were inconsistencies 😮")
-    print(diff)
-else:
-    print("Both are in sync 🎉")
+
+if 'es' in sys.argv or len(sys.argv) == 1:
+    es = elasticsearch.Elasticsearch()
+    es_view = {}
+
+    i = 0
+    for row in scan(es, {"query": {"exists": {"field": "doc_version"}}, "fields": ["doc_version", "txid"], "_source": False}, index="some-index", size=10*1000):
+        es_view[row["_id"]] = row["fields"]["txid"][0], row["fields"]["doc_version"][0]
+        i += 1
+        if not (i % 100000):
+            print(i)
+
+    diff = sorted(set(pg_view.items()) ^ set(es_view.items()))
+
+    if diff:
+        print("Elasticsearch: 🔥 There were inconsistencies 😮")
+        print(diff)
+    else:
+        print("Elasticsearch in sync 🎉")
+
+if 'sqlite' in sys.argv or len(sys.argv) == 1:
+    sqlite_conn = sqlite3.connect('synced-test.db')
+    cur = sqlite_conn.cursor()
+    cur.execute("select cast(id as text), last_modified_txid, version from synced")
+
+    sqlite_view = {}
+    for row in cur:
+        external_id, txid, version = row
+        sqlite_view[external_id] = txid, version
+
+    diff = sorted(set(pg_view.items()) ^ set(sqlite_view.items()))
+
+    if diff:
+        print("SQLite: 🔥 There were inconsistencies 😮")
+        print(diff)
+    else:
+        print("SQLite in sync 🎉")

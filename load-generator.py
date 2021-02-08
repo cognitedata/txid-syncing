@@ -32,8 +32,12 @@ class LoadGenerator:
             await cur.execute("select n_live_tup from pg_stat_user_tables where relname='version_info'")
             number_of_nodes = (await cur.fetchone())[0]
 
+            if number_of_nodes == 0:
+                print("Postgres stats think there aren't any nodes. Maybe VACUUM? Pretending it's 30 000")
+                number_of_nodes = 30*1000
+
         # things are called "node" as this was pulled out of a property graph example
-        number_of_nodes_to_change = 100
+        number_of_nodes_to_change = 10
         hot_nodes = 100
         hot_node_probability = 0.01
         last_status_report = time.time()
@@ -80,7 +84,7 @@ class LoadGenerator:
                         # Occasionally update a lot more than batch size number of things
                         up_to = id_to_change + 10000 * ( 1 + random.random())
                         print('Doing big batch')
-                        await cur.execute("update node set name='Generator was here - {}' where id between {} and {}".format(random.random(), id_to_change, up_to))
+                        await cur.execute("update some_table set name='Generator was here - {}' where id between {} and {}".format(random.random(), id_to_change, up_to))
 
                     if random.random() < .01:
                         # Occasionally do a long sleep, while keeping the transaction going, to get the occasional
