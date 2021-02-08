@@ -3,3 +3,6 @@ elasticsearch
 aiopg
 marshmallow
 cryptography
+asyncpg
+aiohttp
+aiosqlite
