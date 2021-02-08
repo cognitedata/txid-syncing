@@ -88,9 +88,19 @@ class Cursor:
         self.xip_list = xip_list or []
         self.xid_next = xid_next
 
-        # Temporary hack
-        self.additional_froms = additional_froms
-        self.additional_wheres = additional_wheres
+        assert 1 <= number_of_partitions <= 128
+        assert 0 <= partition_id < number_of_partitions
+        self.number_of_partitions = number_of_partitions
+        self.partition_id = partition_id
+
+        # Temporary hack. Should instead accept a JSON object expressing a filter.
+        self.additional_froms = additional_froms or []
+        self.additional_wheres = additional_wheres or []
+
+        if number_of_partitions > 1:
+            # TODO: These should become params, so plans can be reused.
+            # (We check that they're ints, so not an injection vector, though.)
+            self.additional_wheres.append("id % {} = {}".format(number_of_partitions, partition_id))
 
         # These are just for debugging
         self._previous = previous
@@ -364,6 +374,7 @@ with changes as (
             self.batch_size, xid_next=xid_next, xip_list=xip_list,
             xid_at=xid_at, xid_at_id=xid_at_id,
             additional_froms=self.additional_froms, additional_wheres=self.additional_wheres,
+            partition_id=self.partition_id, number_of_partitions=self.number_of_partitions,
             type=cursor_type, previous=self)
 
 
@@ -388,6 +399,9 @@ class CursorSchema(Schema):
     # We know we have done everything except what's in xip-list up to this version    
     xid_next = fields.Integer(allow_none=True)
 
+    number_of_partitions = fields.Integer(allow_none=True)
+    partition_id = fields.Integer(allow_none=True)
+
     @validates_schema
     def validate(self, data, **kw):
         if not 1 <= data['batch_size'] <= 10000:
@@ -395,6 +409,9 @@ class CursorSchema(Schema):
 
         if data['xid_at'] and not(data.get('xid_next') and data.get('xid_at_id')):
             raise ValidationError("if xid_at is provided, both xid_next and xid_at_id must be provided too")
+
+        if data.get('number_of_partitions') is None != data.get('partition_id') is None:
+            raise ValidationError("must specify both partition number and id or none of them")
 
     @marshmallow.post_load
     def make_token(self, data, **kw):
