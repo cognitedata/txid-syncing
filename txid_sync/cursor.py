@@ -81,7 +81,7 @@ class Cursor:
                 # the query DSL that the property graph will handle            
                 additional_froms=None, additional_wheres=None,
                 # For debugging
-                previous=None, type=None):
+                type=None):
         self.batch_size = batch_size
         self.xid_at = xid_at
         self.xid_at_id = xid_at_id
@@ -94,17 +94,28 @@ class Cursor:
         self.partition_id = partition_id
 
         # Temporary hack. Should instead accept a JSON object expressing a filter.
-        self.additional_froms = additional_froms or []
-        self.additional_wheres = additional_wheres or []
+        self.additional_froms = set(additional_froms or [])
+        self.additional_wheres = set(additional_wheres or [])
 
         if number_of_partitions > 1:
             # TODO: These should become params, so plans can be reused.
             # (We check that they're ints, so not an injection vector, though.)
-            self.additional_wheres.append("id % {} = {}".format(number_of_partitions, partition_id))
+            self.additional_wheres.add("id % {} = {}".format(number_of_partitions, partition_id))
 
         # These are just for debugging
-        self._previous = previous
         self.type = type
+
+    def __eq__(self, other):
+        return all(
+            getattr(self, key) == getattr(other, key)
+            # The order isn't entirely random, but based on guessing what's most likely
+            # to be different between cursors that could converge on being the samea
+            for key in ('xid_next', 'partition_id', 'additional_wheres', 'number_of_partitions',
+                        'xid_at_id', 'xid_at', 'xip_list', 'xid_at_id', 'additional_froms')
+            )
+
+    def __hash__(self):
+        return hash( (self.xid_next, self.xid_at, self.xid_at_id, self.batch_size) )
 
     def to_token(self) -> str:
         f = Fernet(FERNET_NOT_REALLY_A_KEY)
@@ -252,7 +263,7 @@ limit {batch_size}
             )
 
         return """
-/* {self} (previous: {previous}) */
+/* {self} */
 with changes as (
     select priority, last_modified_txid, id, version from (
         {unions}
@@ -272,7 +283,6 @@ with changes as (
             # is that the 2nd and 3rd sub-selects will only be pull-ed *if* required, and
             # only for however many rows are necessary to fill the batch.
             self=self,
-            previous=self._previous,
             unions="\n\nunion all\n\n".join(
                 "select * from (\n\t{}\n) as _{}(priority, last_modified_txid, id, version)".format(
                     select, i
@@ -291,6 +301,8 @@ with changes as (
             )
         )
 
+    __repr__ = __str__
+
     def advance(self, snapshot, rows, new_batch_size=None) -> "Cursor":
         if not rows:
             # If we're done, then past xips must have finished or be in the active_xip_list,
@@ -301,7 +313,7 @@ with changes as (
             return type(self)(
                 new_batch_size or self.batch_size, xid_next=xid_next, xip_list=xip_list,
                 partition_id=self.partition_id, number_of_partitions=self.number_of_partitions,
-                previous=self, type=cursor_type
+                type=cursor_type
             )
 
         xid_at = None
@@ -371,13 +383,12 @@ with changes as (
                 if xip < xid_next
             ])
 
-        self._previous = None # or we'd memleak as we'd keep the chain forever
         return type(self)(
             self.batch_size, xid_next=xid_next, xip_list=xip_list,
             xid_at=xid_at, xid_at_id=xid_at_id,
             additional_froms=self.additional_froms, additional_wheres=self.additional_wheres,
             partition_id=self.partition_id, number_of_partitions=self.number_of_partitions,
-            type=cursor_type, previous=self)
+            type=cursor_type)
 
 
 class CursorSchema(Schema):
