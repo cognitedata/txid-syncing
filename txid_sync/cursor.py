@@ -306,8 +306,14 @@ with changes as (
     def advance(self, snapshot, rows, new_batch_size=None) -> "Cursor":
         if not rows:
             # If we're done, then past xips must have finished or be in the active_xip_list,
-            # since we've just queried for them
-            xid_next = self.xid_next + 1
+            # since we've just queried for them. We keep the xid_next the same, so different
+            # clients with the same cursor can possibly converge in a situation where they
+            # end up listening for the same things. If several clients are needing the same
+            # data, then this should eventually happen when they've all caught up. We already
+            # know that the query for >= xid_next produced nothing, so repeating that query
+            # until it produces something (which will in turn cause xid_next to increase) is
+            # fine.
+            xid_next = self.xid_next
             xip_list = [xip for xip in snapshot["xip_list"] if xip < xid_next]
             cursor_type = 'empty'
             return type(self)(
