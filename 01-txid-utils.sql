@@ -4,15 +4,23 @@
 -- "stable" prevents this function from being used in an expression index, which it
 -- shouldn't be, while letting Postgres sufficiently inline it. It's trivially
 -- leakproof and parallel safe
-create or replace function txid_offset() returns bigint stable leakproof parallel safe language sql as $$ select 0::bigint $$;
+create or replace function txid_offset()
+returns bigint
+stable leakproof parallel safe
+language sql as
+$$ select 0::bigint $$;
 
 -- Adjusted for pgdumps/restores to different clusters, what's the current txid?
-create or replace function adjusted_txid_current() returns bigint language sql as $$ select txid_offset() + txid_current() $$;
+create or replace function adjusted_txid_current()
+returns bigint
+stable leakproof
+language sql as
+$$ select txid_offset() + txid_current() $$;
 
 -- Applications that write to or read from tables where a correct txid is imporant to maintain need to call this first.
 -- It only needs to be called once after a pg_restore, but as it's only going to cost a few milliseconds, it's
 -- probably a good idea to just run whenever an app connects to a database-dsn for the first time. 
-create or replace function configure_txid_offset()
+create or replace function configure_txid_offset(_txid_column_name text default 'last_modified_txid')
 returns bigint
 volatile
 security definer -- Even read only users need to be able to set this, in case they're first after a pg_restore
@@ -25,14 +33,15 @@ begin
     -- we find the highest txid of all of them. That's the highest txid we have
     -- ever saved, so we want the diff of txid_current and that to be an offset
     -- quote_ident is used just in case the table name has SQL control characters
+    _txid_column_name := quote_ident(_txid_column_name);
     execute
         coalesce(
             (
-                select 'select max(txid)::bigint as max_txid from (select max(last_modified_txid) as txid from ' ||
-                array_to_string(array_agg(quote_ident(table_name)),' union select max(last_modified_txid) as txid from ') ||
+                select 'select max(txid)::bigint as max_txid from (select max(' || _txid_column_name || ') as txid from ' ||
+                array_to_string(array_agg(quote_ident(table_name)),' union select max(' || _txid_column_name || ') as txid from ') ||
                 ') txids'
                 from information_schema.columns
-                where column_name = 'last_modified_txid'
+                where column_name = _txid_column_name
             ),
             -- There are no tables with a txid column
             'select 0'
@@ -52,30 +61,50 @@ begin
 end; $$;
 
 
-create or replace function adjusted_txid_snapshot() returns record
-stable leakproof language sql as $$
+create or replace function adjusted_txid_snapshot()
+returns record
+stable leakproof
+language sql as $$
     select 
-        (select coalesce(array_agg(txid), ARRAY[]::bigint[]) from (select txid_offset() + txid_snapshot_xip(txid_current_snapshot())) as _(txid)) as xip_list,
+        (select coalesce(array_agg(txid), ARRAY[]::bigint[]) from
+            (select txid_offset() + txid_snapshot_xip(txid_current_snapshot())) as _(txid)
+        ) as xip_list,
         (select txid_offset() + txid_snapshot_xmin(txid_current_snapshot())) as xmin,
         (select txid_offset() + txid_snapshot_xmax(txid_current_snapshot())) as xmax,
         (select txid_offset() + txid_current()) as txid_current;
 $$;
 
 
-create or replace function adjusted_txid_snapshot_as_json() returns json
+create or replace function adjusted_txid_snapshot_as_json()
+returns json
 stable leakproof language sql as $$
     select to_json(adjusted_txid_snapshot());
 $$;
 
 
+-- This trigger causes a NOTIFY to happen with the channel and payload
+-- statically defined at trigger creation time.
 create or replace function notify_on_update()
-returns trigger language plpgsql as $$
+returns trigger
+language plpgsql as $$
 begin
     perform pg_notify(/* channel = */ TG_ARGV[0], /* payload = */ TG_ARGV[1]);
     return new;
 end; $$;
 
+-- Unparameterised version of the trigger that'll just cause 
+-- `NOTIFY table_changed, 'name_of_table_as_payload'` to happen
+-- when it triggers.
+create or replace function notify_table_change()
+returns trigger
+language plpgsql as $$
+begin
+    perform pg_notify('table_changed', TG_TABLE_NAME);
+    return new;
+end; $$;
 
+-- This function isn't very parameterisable without making it a bit
+-- crazy
 create or replace function update_version_info() returns trigger as $$
 begin
     update version_info set
@@ -90,11 +119,3 @@ begin
     return new;
 end; $$
 language plpgsql;
-
-
-create or replace function notify_on_update()
-returns trigger language plpgsql as $$
-begin
-    perform pg_notify(/* channel = */ TG_ARGV[0], /* payload = */ TG_ARGV[1]);
-    return new;
-end; $$;
