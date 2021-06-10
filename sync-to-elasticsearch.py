@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 import asyncio, datetime, os
 import aiopg
+import time
+import structlog
+import json
+import base64
 
 from psycopg2.extras import RealDictCursor
 
 from txid_sync.cursor import Cursor
+
+logger = structlog.get_logger()
 
 
 import time, random
@@ -22,6 +28,44 @@ def maybe_crash():
             os.kill(os.getpid(), 9)
 
 
+def backoff_wait(multiplier=0.5, max_wait=60, base=2):
+    """ Generator that emits how long to wait, according to the "Full Jitter" approach
+    described in this post:
+
+    https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+    """
+    past_attempts=0    
+    while True:
+        # 100 is an arbitrary limit at which point most sensible parameters are likely to
+        # be capped by max anyway.
+        yield random.uniform(0, min(multiplier * (base ** min(100, past_attempts)), max_wait))
+        past_attempts += 1
+
+
+class TemporaryProblem(Exception):
+    pass
+
+
+
+async def keep_retrying(handler, *a, **kw):
+    wait_time = backoff_wait(**(kw.pop('backoff_kwargs', dict())))
+    RetryableException = kw.pop('retryable_exception', Exception)
+    reraise_errors = kw.pop('reraise_errors', [])
+
+    while True:
+        try:
+            print('Gonna attempt a thing')
+            return (await (handler(*a, **kw)))
+        except RetryableException as e:
+            logger.exception("hmm")
+            for error_type in reraise_errors:
+                if isinstance(e, error_type):
+                    raise e
+
+            logger.debug("trying again")
+            await asyncio.sleep(next(wait_time))
+
+
 class SyncClient:
 
     def __init__(self, postgres_config, batch_size=1000, initial_cursor=None):
@@ -32,8 +76,12 @@ class SyncClient:
 
         self._keep_running = False
         self._is_listening = False
+
         self.indexed = 0
-        self.errors = 0
+        self.retryable_errors = 0
+        self.permanent_errors = 0
+
+        self.debounce_time_in_seconds = 2
 
     async def connect(self):
         self._connection = await aiopg.connect(self._postgres_config)
@@ -71,6 +119,7 @@ class SyncClient:
         self._keep_running = True
         try:
             while self._keep_running:
+                start_of_loop = time.monotonic()
                 maybe_crash()
                     
                 # If we're listening, stop listening, in case we're about to get a big batch, so
@@ -99,6 +148,13 @@ class SyncClient:
                 while self._keep_running:
                     try:
                         msg = await asyncio.wait_for(self._connection.notifies.get(), timeout=10)
+
+                        # If there's a flurry of tiny changes, stagger a bit so we get fewer
+                        # slightly bigger batches instead of flurries of small ones.
+                        time_since_start = time.monotonic() - start_of_loop
+                        if time_since_start < self.debounce_time_in_seconds:
+                            await asyncio.sleep(self.debounce_time_in_seconds - time_since_start)
+
                     except asyncio.TimeoutError:
                         # This allows for either picking up changes that for some reason didn't
                         # cause a notify (which a trigger should do), or to cheaply advance a cursor
@@ -228,7 +284,8 @@ class ElasticsearchSyncClient(SyncClient):
         self._persistable_cursor = None
 
         self.indexed = 0
-        self.errors = 0
+        self.retryable_errors = 0
+        self.permanent_errors = 0
 
     def get_sql_for_batch(self):
         changes_cte = self._current_cursor.get_changes_cte()
@@ -242,7 +299,7 @@ class ElasticsearchSyncClient(SyncClient):
         from changes
         left join lateral (
             select * from some_table
-            --left join metadata using(id)
+            -- left join metadata using(id)
             where id=changes.id
         ) as data on(true)
         order by last_modified_txid asc, id asc     
@@ -270,7 +327,7 @@ class ElasticsearchSyncClient(SyncClient):
         ]
         if self._persistable_cursor:
             # This will have been the cursor for the _previous_ batch. We piggy back on this bulk
-            # request to update the cursor. (The update is cheap,)
+            # request to update the cursor.
             bulk.append({
                 "_index": self.index_name,
                 "_id": self.cursor_doc_id,
@@ -278,33 +335,93 @@ class ElasticsearchSyncClient(SyncClient):
                 "timestamp": datetime.datetime.utcnow().isoformat()
             })
 
-        # We're NOT saving the cursor in this bulk. We need to assess the errors first.
-        _, errors = await async_bulk(self.es_client, bulk, chunk_size=self.batch_size, raise_on_error=False)
+        # We have two levels of retrying here.
+        # The outer one handles document-level problems. Document level problems could be a document
+        # being malformed, which we'll index as an error, or backpressure from certain shards.
+        # Until we have 0 indexing errors, we'll be stuck here (though we try not to beat up ES too
+        # hard with our waiting) on this batch.
 
-        maybe_crash()
+        retryable_wait = backoff_wait()
 
-        for error in errors:
-            # version_conflict_engine_exception are not a problem, as it means the document
-            # we sent is either already indexed (most likely) or a newer version exists (should
-            # not happen if everything goes through us) Documents indexed prior to persisting 
-            # the cursor will cause this herror if a crash+restart happens after indexing of the
-            # docs, but before the persisting of the cursor
-            if error['index']['error']['type'] != 'version_conflict_engine_exception':
-                # TODO: Proper retrying if the queue is full (back pressure), indexing if it's a
-                # mapping error (no amount of retrying will fix it), etc. would happen here
-                print('***', error)
-                raise NotImplementedError() # We're a POC for now
+        while bulk:
+            # The inner retry here handles transient errors at the entire request level. Errors likely
+            # to happen here are not being able to connect at all, connection disruptions, TLS errors,
+            # authentication problems, etc.
+            _, errors = await keep_retrying(
+                async_bulk, self.es_client, bulk,
+                chunk_size=self.batch_size,
+                # ... but any errors from the bulk API, which we'll relate to specific docs,
+                # we'll inspect ourself.
+                raise_on_error=False
+            )
+            if not errors:
+                break
 
+            maybe_crash()
+
+            permanent_errors = dict()
+            retryable_errors = dict()
+
+            for error in errors:
+                error = error['index'] # we only do index operations
+                # Good read: https://www.elastic.co/blog/why-am-i-seeing-bulk-rejections-in-my-elasticsearch-cluster
+
+                # version_conflict_engine_exception are not a problem, as it means the document
+                # we sent is either already indexed (most likely) or a newer version exists (should
+                # not happen if everything goes through us) Documents indexed prior to persisting 
+                # the cursor will cause this error if a crash+restart happens after indexing of the
+                # docs, but before the persisting of the cursor
+                if error['error']['type'] == 'version_conflict_engine_exception':
+                    continue
+
+                if error['status'] == 400:
+                    # Mapping errors will cause 400s. These cannot be resolved at all without intervention
+                    # at the document level. Combining dynamic mapping with indexing of data you don't
+                    # control (as well as you thought) can cause this. We note the problem and move on,
+                    # or we'd be stuck for ever.
+                    assert not error['_id'].startswith("error:")
+                    permanent_errors[error['_id']] = error
+                else:
+                    # Anything we don't know to be a permanent error we consider transient. We'll keep
+                    # trying forever until we complete, though we'll quickly spend most of our time just
+                    # waiting. Likely things to cause this would be back pressure (429s), shard-level problems
+                    # (full disk), etc. When these eventually clear up, we'll proceed.
+                    retryable_errors[error['_id']] = error
+
+            retry = []
+            if retryable_errors or permanent_errors:
+                for doc in bulk:
+                    id_as_string = str(doc["_id"])
+                    if id_as_string in retryable_errors:
+                        retry.append(doc)
+                    elif id_as_string in permanent_errors:
+                        retry.append({
+                            "_index": self.index_name,
+                            "_id": "error:{}".format(doc["_id"]),
+                            "_version": doc["_version"],
+                            "_version_type": "external",
+                            "id": doc["_id"],
+                            "doc_version": doc["doc_version"],
+                            "txid": doc["txid"],
+                            "error": permanent_errors[str(doc['_id'])],
+                            "raw_data": base64.b64encode(json.dumps(doc).encode('utf8')).decode('utf8')
+                        })
+                self.permanent_errors += len(permanent_errors)
+                self.retryable_errors += len(retryable_errors)
+
+            bulk = retry
+
+            # ES is pushing back, so do a bit of waiting.
+            if retryable_errors:
+                await asyncio.sleep(next(retryable_wait))
+
+        # At this point we've handled any errors, so we're clear up to here and the cursor can be persisted
         self._persistable_cursor = self._current_cursor.to_token()
 
-        self.errors += len(errors)
-        self.indexed += len(batch) - len(errors)
+        self.indexed += len(batch)
 
         if self.indexed:
-            print('Errors/Indexed/%: ', self.errors, self.indexed, self.errors * 100.0/self.indexed)
-
-        if errors:
-            print('There were multiple index operations for the same doc+version combo', len(errors), errors[0])
+            print('Temporary/Permanent Errors, Indexed', self.retryable_errors, self.permanent_errors, self.indexed)
 
     async def save_cursor(self):
         if (datetime.datetime.utcnow() - self.previous_cursor_saved).total_seconds() < self.cursor_save_delay_in_seconds:
@@ -315,7 +432,7 @@ class ElasticsearchSyncClient(SyncClient):
         maybe_crash()
 
         now = datetime.datetime.utcnow()
-        await self.es_client.index(self.index_name, {
+        await keep_retrying(self.es_client.index, self.index_name, {
             "cursor_token": self._current_cursor.to_token(),
             "timestamp": now.isoformat()
         }, id=self.cursor_doc_id)
@@ -325,7 +442,9 @@ class ElasticsearchSyncClient(SyncClient):
     async def initialise(self):
         await super(ElasticsearchSyncClient, self).initialise()
         try:
-            doc = await self.es_client.get(self.index_name, self.cursor_doc_id, realtime=True)
+            doc = await keep_retrying(
+                self.es_client.get, self.index_name, self.cursor_doc_id,
+                realtime=True, reraise_errors=[elasticsearch.NotFoundError])
         except elasticsearch.NotFoundError:
             print("Starting from scratch")
             additional_froms=['left outer join node using(node_id)', 'left outer join edge using(edge_id)']
@@ -335,6 +454,16 @@ class ElasticsearchSyncClient(SyncClient):
         else:
             self._current_cursor = Cursor.from_token(doc["_source"]["cursor_token"].encode("utf8"))
             print("Resuming from", self._current_cursor)
+
+
+async def retryable():
+    r = random.random()
+    print('xx', r)
+    if r < .4:
+        print('Go boom')
+        raise TemporaryProblem()
+    else:
+        return ':)'
 
 
 dsn = os.environ.get("POSTGRES_CONFIG", "dbname=sync-test fallback_application_name=pysync client_encoding=utf-8")
