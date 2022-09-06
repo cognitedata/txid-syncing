@@ -70,8 +70,7 @@ language sql as $$
             (select txid_offset() + txid_snapshot_xip(txid_current_snapshot())) as _(txid)
         ) as xip_list,
         (select txid_offset() + txid_snapshot_xmin(txid_current_snapshot())) as xmin,
-        (select txid_offset() + txid_snapshot_xmax(txid_current_snapshot())) as xmax,
-        (select txid_offset() + txid_current()) as txid_current;
+        (select txid_offset() + txid_snapshot_xmax(txid_current_snapshot())) as xmax
 $$;
 
 
