@@ -1,7 +1,8 @@
+asyncpg
 psycopg2
 elasticsearch
 aiopg
-marshmallow
+pydantic
 cryptography
 asyncpg
 aiohttp
