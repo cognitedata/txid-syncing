@@ -262,30 +262,6 @@ class CursorContext(BaseModel):
             xid_skip_deletes_before=xid_skip_deletes_before,
         )
 
-    def to_progressed_cursor_without_comments_and_optimizations(self) -> Cursor:
-        if self.count < self.batch_size:
-            xid_next = self.snapshot.xmax
-            if self.last:
-                last_txid, _ = self.last
-                if last_txid == xid_next:
-                    xid_next += 1
-
-            return self.previous_cursor.progress_to(xid_next=xid_next, xip_list=self.snapshot.xip_list)
-
-        assert self.last  # the batch is full, so there must be a last row
-        xid_at, xid_at_id = self.last
-
-        xid_next = max(self.previous_cursor.xid_next, xid_at + 1)
-
-        if xid_at == self.snapshot.xmax:
-            xid_next = xid_at + 1
-        else:
-            xid_next = min(xid_next, self.snapshot.xmax)
-
-        return self.previous_cursor.progress_to(
-            xid_next=xid_next, xid_at=xid_at, xid_at_id=xid_at_id, xip_list=self.snapshot.xip_list
-        )
-
 
 class OpaqueCursor(bytes):
     """An opaque cursor decodes into a `Cursor` via a list of encryption keys"""
