@@ -106,6 +106,7 @@ class Cursor(BaseModel):
 
     def progress_to(
         self,
+        batch_size: int,
         xid_next: int,
         xip_list: List[int],
         xid_at: Optional[int] = None,
@@ -128,7 +129,7 @@ class Cursor(BaseModel):
 
         return Cursor(
             version=self.version,
-            batch_size=self.batch_size,
+            batch_size=batch_size,
             issued_at=int(time.time()),
             xid_next=xid_next,
             xid_at=xid_at,
@@ -196,7 +197,10 @@ class CursorContext(BaseModel):
                     xid_next += 1
 
             return self.previous_cursor.progress_to(
-                xid_next=xid_next, xip_list=self.snapshot.xip_list, xid_skip_deletes_before=xid_skip_deletes_before
+                batch_size=self.batch_size,
+                xid_next=xid_next,
+                xip_list=self.snapshot.xip_list,
+                xid_skip_deletes_before=xid_skip_deletes_before,
             )
 
         # Since we're still here, we know that we filled the batch:
@@ -250,6 +254,7 @@ class CursorContext(BaseModel):
         )
 
         return self.previous_cursor.progress_to(
+            batch_size=self.batch_size,
             xid_next=xid_next,
             xid_at=xid_at,
             xid_at_id=xid_at_id,
@@ -342,7 +347,7 @@ class OpaqueCursor(bytes):
 routes = web.RouteTableDef()
 
 
-async def fetch_from(conn: asyncpg.connection.Connection, cursor_for_next_batch: Cursor):
+async def fetch_from(conn: asyncpg.connection.Connection, cursor_for_next_batch: Cursor, batch_size: int):
     # We need to make sure that the snapshot we read is the same as the one we fetch the
     # batch of changes with, so we do repeatable read to ensure a static snapshot
     t = conn.transaction(isolation="repeatable_read")
@@ -360,7 +365,7 @@ async def fetch_from(conn: asyncpg.connection.Connection, cursor_for_next_batch:
     )
 
     # Fetch the batch
-    rows = await conn.fetch(get_sql_for_query(cursor_for_next_batch.batch_size), *args)
+    rows = await conn.fetch(get_sql_for_query(batch_size), *args)
 
     # Computing the next cursor might need the txid and id of the last row
     last_txid_and_id = None
@@ -370,7 +375,7 @@ async def fetch_from(conn: asyncpg.connection.Connection, cursor_for_next_batch:
     cursor_context = CursorContext(
         snapshot=Snapshot(**snapshot),
         count=len(rows),
-        batch_size=cursor_for_next_batch.batch_size,
+        batch_size=batch_size,
         last=last_txid_and_id,
         previous_cursor=cursor_for_next_batch,
     )
@@ -378,7 +383,7 @@ async def fetch_from(conn: asyncpg.connection.Connection, cursor_for_next_batch:
 
     await t.rollback()
 
-    return next_cursor, [json.loads(row["data"]) for row in rows[: cursor_for_next_batch.batch_size]]
+    return next_cursor, [json.loads(row["data"]) for row in rows[:batch_size]]
 
 
 def get_sql_for_query(batch_size: int) -> str:
@@ -439,10 +444,11 @@ limit {batch_size}
 @routes.post("/api/events")
 async def events(request):
     body = await request.json()
+    batch_size = body.get("batch_size", 2000)
 
     if body.get("cursor") is None:
         # No cursor has been provided, so we're starting anew
-        cursor = Cursor(xip_list=[], xid_next=0)
+        cursor = Cursor(batch_size=batch_size, xip_list=[], xid_next=0)
     else:
         try:
             cursor = OpaqueCursor.to_cursor(body["cursor"].encode("utf-8"))
@@ -450,7 +456,7 @@ async def events(request):
             raise web.HTTPBadRequest(reason="Invalid cursor")
 
     async with request.app["pool"].acquire() as conn:
-        next_cursor, rows = await fetch_from(conn, cursor)
+        next_cursor, rows = await fetch_from(conn, cursor, batch_size)
         print("Got {} rows from {}. Next: {}".format(len(rows), cursor, next_cursor))
 
     return web.json_response({"cursor": str(next_cursor.to_opaque_cursor()), "events": rows})
