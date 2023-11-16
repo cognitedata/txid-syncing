@@ -234,11 +234,26 @@ class CursorContext(BaseModel):
             # in progress.
             xid_next = min(xid_next, self.snapshot.xmax)
 
+        if self.previous_cursor.xid_at == xid_at:
+            # If xid_at did not move, then nothing from the xip_list will have been processed
+            xips_to_keep = self.previous_cursor.xip_list
+        else:
+            # If it did move, then at least some xip_list txids have been involved, and we don't need to
+            # retain anything less than xid_at, unless they're still in the snapshot, which
+            # get union-ed below. Now-committed txids from xip_list are processed in order, and the
+            # last one will become the new xid_at if we don't process all the changes.
+            xips_to_keep = [xip for xip in self.previous_cursor.xip_list if xip > xid_at]
+
+        xip_list = list(
+            # We obviously have to carry forward what's still in the snapshot:
+            set(self.snapshot.xip_list) | set(xips_to_keep)
+        )
+
         return self.previous_cursor.progress_to(
             xid_next=xid_next,
             xid_at=xid_at,
             xid_at_id=xid_at_id,
-            xip_list=self.snapshot.xip_list,
+            xip_list=xip_list,
             xid_skip_deletes_before=xid_skip_deletes_before,
         )
 
