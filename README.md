@@ -3,9 +3,8 @@
 This repository has examples of to reliably sync changes out of
 Postgres and into external systems.
 
-It supports the talk "Flexible change data capture with Postgres". A
-link to a recording of that talk will be provided here when the
-recording is available.
+It supports the talk "[Flexible change data capture with Postgres](https://vimeo.com/747697698)"
+([Recording](https://vimeo.com/747697698)).
 
 # Background material
 
