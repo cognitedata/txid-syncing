@@ -22,8 +22,11 @@ sqlite_conn.rollback()
 
 # Keep polling for changes, making sure to persist the cursor atomically to saving the changes
 while True:
-    r = s.post("http://localhost:8080/api/events", json={"cursor": cursor}).json()
-    cursor, rows = r["cursor"], r["events"]
+    print("cursor:", cursor)
+    r = s.post("http://localhost:8080/api/events", json={"cursor": cursor})
+    r.raise_for_status()
+    data = r.json()
+    cursor, rows = data["cursor"], data["events"]
     cur = sqlite_conn.cursor()
     cur.executemany(
         "replace into synced(id, name, version, last_modified_txid, data) values (?, ?, ?, ?, ?)",
