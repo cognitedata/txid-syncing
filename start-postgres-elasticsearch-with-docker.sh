@@ -7,7 +7,7 @@ source .env
 
 
 
-docker stop postgres || true
+docker stop postgres elasticsearch || true
 
 
 postgres(){
