@@ -5,57 +5,55 @@ set -o pipefail
 
 source .env
 
-cleanup(){
+cleanup() {
   docker stop postgres || true
   docker stop elasticsearch || true
   docker rm postgres elasticsearch || true
   docker rm elasticsearch || true
 }
 
-postgres(){
-    passopt=()
-for var in \
-    PGPASSWORD DB_HOST DB_PORT
-do
+postgres() {
+  passopt=()
+  for var in \
+    PGPASSWORD DB_HOST DB_PORT; do
     if [ -n "${!var}" ]; then
-       passopt+=(-e $var)
+      passopt+=(-e $var)
     fi
-done
+  done
 
-docker run \
- --name=postgres \
- -w "$(pwd)" \
- -v "$(pwd):/$(pwd)" \
- -e POSTGRES_PASSWORD=password \
- -e POSTGRES_USER=postgres \
- --add-host host.docker.internal:host-gateway \
- --net host \
- "${passopt[@]}" \
-postgres:${PG_VERSION}
+  docker run \
+    --name=postgres \
+    -w "$(pwd)" \
+    -v "$(pwd):/$(pwd)" \
+    -e POSTGRES_PASSWORD=password \
+    -e POSTGRES_USER=postgres \
+    --add-host host.docker.internal:host-gateway \
+    --net host \
+    "${passopt[@]}" \
+    postgres:${PG_VERSION}
 }
 
-elasticsearch(){
-    passopt=()
-for var in \
-    PGPASSWORD DB_HOST DB_PORT
-do
+elasticsearch() {
+  passopt=()
+  for var in \
+    PGPASSWORD DB_HOST DB_PORT; do
     if [ -n "${!var}" ]; then
-       passopt+=(-e $var)
+      passopt+=(-e $var)
     fi
-done
+  done
 
-docker run \
- --name=elasticsearch \
- -w "$(pwd)" \
- -v "$(pwd):/$(pwd)" \
- --add-host host.docker.internal:host-gateway \
- --net host \
- "${passopt[@]}" \
--e "discovery.type=single-node" \
--e ELASTIC_PASSWORD=password \
--e "xpack.security.enabled=false" \
--m 1GB  \
-elasticsearch:${ELASTIC_VERSION}
+  docker run \
+    --name=elasticsearch \
+    -w "$(pwd)" \
+    -v "$(pwd):/$(pwd)" \
+    --add-host host.docker.internal:host-gateway \
+    --net host \
+    "${passopt[@]}" \
+    -e "discovery.type=single-node" \
+    -e ELASTIC_PASSWORD=password \
+    -e "xpack.security.enabled=false" \
+    -m 1GB \
+    elasticsearch:${ELASTIC_VERSION}
 }
 
 retry() {
@@ -82,14 +80,14 @@ postgres &
 elasticsearch &
 
 retry 1>&2 ${MAX_ATTEMPTS:-50} ${RETRY_DELAY_SECONDS:-1} \
-docker exec \
-postgres \
-pg_isready \
--U postgres \
--d postgres
+  docker exec \
+  postgres \
+  pg_isready \
+  -U postgres \
+  -d postgres
 
 psql -vON_ERROR_STOP=on ${POSTGRES_CONFIG} -f ./apply-schema.sql
 
-docker logs -f postgres    # this follows until a ctrl+c
-docker logs elasticsearch  # without the -f it just dumps it at the end
+docker logs -f postgres   # this follows until a ctrl+c
+docker logs elasticsearch # without the -f it just dumps it at the end
 cleanup
