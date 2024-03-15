@@ -28,7 +28,7 @@ conn.close()
 
 
 if 'es' in sys.argv or len(sys.argv) == 1:
-    es = elasticsearch.Elasticsearch()
+    es = elasticsearch.Elasticsearch(os.environ.get("ELASTICSEARCH_CONFIG", "http://localhost:9200"))
     es_view = {}
 
     i = 0

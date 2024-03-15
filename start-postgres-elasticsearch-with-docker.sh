@@ -5,10 +5,12 @@ set -o pipefail
 
 source .env
 
-
-
-docker stop postgres elasticsearch || true
-
+cleanup(){
+  docker stop postgres || true
+  docker stop elasticsearch || true
+  docker rm postgres elasticsearch || true
+  docker rm elasticsearch || true
+}
 
 postgres(){
     passopt=()
@@ -21,7 +23,6 @@ do
 done
 
 docker run \
- --rm \
  --name=postgres \
  -w "$(pwd)" \
  -v "$(pwd):/$(pwd)" \
@@ -44,15 +45,17 @@ do
 done
 
 docker run \
- --rm \
  --name=elasticsearch \
  -w "$(pwd)" \
  -v "$(pwd):/$(pwd)" \
  --add-host host.docker.internal:host-gateway \
  --net host \
  "${passopt[@]}" \
--p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" \
-elasticsearch:${ES_VERSION}
+-e "discovery.type=single-node" \
+-e ELASTIC_PASSWORD=password \
+-e "xpack.security.enabled=false" \
+-m 1GB  \
+elasticsearch:${ELASTIC_VERSION}
 }
 
 retry() {
@@ -74,6 +77,7 @@ retry() {
   done
 }
 
+cleanup
 postgres &
 elasticsearch &
 
@@ -88,4 +92,4 @@ psql -vON_ERROR_STOP=on ${POSTGRES_CONFIG} -f ./apply-schema.sql
 
 docker logs -f postgres    # this follows until a ctrl+c
 docker logs elasticsearch  # without the -f it just dumps it at the end
-docker stop postgres elasticsearch || true
+cleanup
