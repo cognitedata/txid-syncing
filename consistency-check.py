@@ -28,7 +28,16 @@ conn.close()
 
 
 if 'es' in sys.argv or len(sys.argv) == 1:
-    es = elasticsearch.Elasticsearch()
+    es = elasticsearch.Elasticsearch(os.environ.get("ELASTICSEARCH_CONFIG", "http://localhost:9200"))
+    es.index(
+        index="some-index",
+        id="id",
+        document={
+            "id": "id",
+            "name": "name",
+            "data": "data",
+        },
+    )
     es_view = {}
 
     i = 0
@@ -42,7 +51,7 @@ if 'es' in sys.argv or len(sys.argv) == 1:
 
     if diff:
         print("Elasticsearch: 🔥 There were inconsistencies 😮")
-        print(diff)
+        # print(diff)
     else:
         print("Elasticsearch in sync 🎉")
 

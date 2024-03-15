@@ -17,11 +17,13 @@ from typing import List, Optional, Tuple, TypeVar, cast
 import asyncpg
 from aiohttp import web
 from cryptography.fernet import Fernet, InvalidSignature, InvalidToken  # type: ignore
+from dotenv import load_dotenv
 from lz4.frame import compress, decompress, get_frame_info  # type: ignore
 from orjson import dumps, loads
 from pydantic import BaseModel, Field, validator
 from pydantic.types import ConstrainedInt
 
+load_dotenv()
 BATCH_SIZE_MAX = 2000
 
 

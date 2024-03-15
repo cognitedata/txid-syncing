@@ -1,9 +1,13 @@
 asyncpg
-psycopg2
+psycopg2-binary
 elasticsearch
 aiopg
-pydantic
+pydantic<2
 cryptography
 asyncpg
 aiohttp
 aiosqlite
+lz4
+python-dotenv
+requests
+orjson

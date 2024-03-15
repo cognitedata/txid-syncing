@@ -28,8 +28,17 @@ is called "sync-test", so grep for that and replace or just call it
 that.
 
 You'll need python3 and the stuff in requirements.txt, e.g. via `pip3
-install -r requirements.txt`.
+install -r requirements.txt`. You can use a virtual environment if you like.
 
+Then you can run the scripts in the following order:
+
+```sh
+ python3 -m venv .venv          # do this once or when the requirements.txt changes
+. .venv/bin/activate            # you will need to do this each terminal session
+pip install -r requirements.txt # do this once when the requirements.txt changes within the active venv
+```
+
+* `start-postgres-elasticsearch-with-docker.sh` will start a postgres and elastic search using docker
 * `demo-app.py` will provide a tiny API that provides bulks of changes and a cursor.
 * `load-generator.py` generates random transactions that commit out of order. This load would cause naïve syncing based on timestamps to fail pretty quickly.
 * `sqlite-via-api-client.py` uses the small API to sync all the data into SQLite.
