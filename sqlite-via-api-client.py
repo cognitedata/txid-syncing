@@ -22,7 +22,6 @@ sqlite_conn.rollback()
 
 # Keep polling for changes, making sure to persist the cursor atomically to saving the changes
 while True:
-    print("cursor:", cursor)
     r = s.post("http://localhost:8080/api/events", json={"cursor": cursor})
     r.raise_for_status()
     data = r.json()
