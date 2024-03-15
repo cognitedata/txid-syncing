@@ -35,7 +35,7 @@ Then you can run the scripts in the following order:
 ```sh
  python3 -m venv .venv          # do this once or when the requirements.txt changes
 . .venv/bin/activate            # you will need to do this each terminal session
-pip install -r requirements.txt # dp this once when the requirements.txt changes within the active venv
+pip install -r requirements.txt # do this once when the requirements.txt changes within the active venv
 ```
 
 * `start-postgres-elasticsearch-with-docker.sh` will start a postgres and elastic search using docker
