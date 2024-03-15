@@ -439,7 +439,6 @@ async def events(request):
 
     return web.json_response({"cursor": str(next_cursor.to_opaque_cursor()), "events": rows})
 
-print("config:", os.environ.get("POSTGRES_CONFIG"))
 
 async def init():
     pool = await asyncpg.create_pool(
