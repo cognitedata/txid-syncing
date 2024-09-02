@@ -226,14 +226,8 @@ class CursorContext(BaseModel):
         # This makes sure we can't be tricked back. If another old transaction has committed
         # and has changes now visible, we'll get to them via the xip_list check, not via
         # last_modified_txid >= xid_next
-        xid_next = max(self.previous_cursor.xid_next, xid_next)
 
-        if xid_at == self.snapshot.xmax:
-            # xmax happens to be something we just saw.
-            # Move past it, so we don't keep getting the same rows back until something else
-            # progresses xmax.
-            xid_next = xid_at + 1
-        else:
+        if xid_at != self.snapshot.xmax:
             # Unless we just saw xmax ourselves, don't move past it. It could be another transaction
             # in progress.
             xid_next = min(xid_next, self.snapshot.xmax)
