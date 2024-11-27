@@ -1,0 +1,17 @@
+[package]
+name = "iam-syncing-client"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+
+[dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

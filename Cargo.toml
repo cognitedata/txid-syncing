@@ -1,0 +1,18 @@
+[workspace]
+members = ["examples/cog-idp-iam-sync/iam-syncing-client"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Ikechukwu Eze"]
+edition = "2021"
+description = "GRPC Client for syncing data from demo CogIdp"
+documentation = "#todo"
+
+[workspace.dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+tonic = "0.12.3"
+prost = "0.13.3"
+tonic-build = "0.12.3"
+iam-syncing-client = { path = "./examples/cog-idp-iam-sync/iam-syncing-client" }
