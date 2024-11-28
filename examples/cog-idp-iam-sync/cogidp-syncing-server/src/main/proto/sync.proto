@@ -1,0 +1,55 @@
+syntax = "proto3";
+option java_multiple_files = true;
+option java_package = "com.cognite.hercules.proto";
+
+service CogIdpToGandalfSyncer {
+  rpc Sync(SyncRequest) returns (stream SyncResponse);
+}
+
+message ProjectsRequest {
+  optional string cursor = 1;
+}
+
+message InvalidatedTokensRequest {
+  optional string cursor = 1;
+}
+
+message SyncRequest {
+  oneof body {
+    ProjectsRequest projects = 1;
+    InvalidatedTokensRequest invalidatedTokens = 2;
+  }
+}
+
+message SyncResponse {
+  oneof body {
+    ProjectSyncResponse project = 1;
+    TokenInvalidationResponse token = 2;
+  }
+}
+
+message ProjectSyncResponse {
+  string name = 1;
+  string orgId = 2;
+  DataModelingStatus dataModelingStatus = 3;
+  ProjectState state = 4;
+  uint32 txid = 5;
+}
+
+message TokenInvalidationResponse {
+  string id = 1;
+  uint32 txid = 2;
+}
+
+enum DataModelingStatus {
+  UNKNOWN = 0;
+  DATA_MODELING_ONLY = 1;
+  DATA_MODELING_FIRST = 2;
+  HYBRID = 3;
+}
+
+enum ProjectState {
+  ACTIVE = 0;
+  LOCKED = 1;
+  DELETED = 2;
+}

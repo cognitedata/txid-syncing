@@ -7,21 +7,14 @@
  */
 
 plugins {
-    // Apply the org.jetbrains.kotlin.jvm Plugin to add support for Kotlin.
-    alias(libs.plugins.kotlin.jvm)
-
-    // Apply the application plugin to add support for building a CLI application in Java.
+    kotlin("jvm") version "2.0.21"
     application
+    id("com.google.protobuf") version "0.9.4"
 }
 
 repositories {
     // Use Maven Central for resolving dependencies.
     mavenCentral()
-}
-
-dependencies {
-    // This dependency is used by the application.
-    implementation(libs.guava)
 }
 
 testing {
@@ -30,6 +23,37 @@ testing {
         val test by getting(JvmTestSuite::class) {
             // Use JUnit Jupiter test framework
             useJUnitJupiter("5.10.3")
+        }
+    }
+}
+
+val protobufVersion = "4.28.3"
+val grpcVersion = "1.68.1"
+val kotlinGrpcVersion = "1.4.1"
+
+protobuf {
+    // Configure the protoc executable
+    protoc {
+        // download from repositories
+        artifact = "com.google.protobuf:protoc:$protobufVersion"
+    }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:$grpcVersion"
+        }
+        create("grpckt") {
+            artifact = "io.grpc:protoc-gen-grpc-kotlin:$kotlinGrpcVersion:jdk8@jar"
+        }
+    }
+    generateProtoTasks {
+        all().forEach {
+            it.plugins {
+                create("grpc")
+                create("grpckt")
+            }
+            it.builtins {
+                create("kotlin")
+            }
         }
     }
 }
@@ -43,5 +67,21 @@ java {
 
 application {
     // Define the main class for the application.
-    mainClass = "org.example.AppKt"
+    mainClass = "com.cognite.hercules.AppKt"
+}
+
+dependencies {
+
+    // Coroutines (lightweight threads).
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
+    // This dependency is used by the application.
+    implementation(libs.guava)
+
+    // Protobuf / GRPC
+    implementation("com.google.protobuf:protobuf-java:$protobufVersion")
+    implementation("com.google.protobuf:protobuf-kotlin:$protobufVersion")
+    implementation("io.grpc:grpc-protobuf:$grpcVersion")
+    implementation("io.grpc:grpc-services:$grpcVersion")
+    implementation("io.grpc:grpc-kotlin-stub:$kotlinGrpcVersion")
 }
