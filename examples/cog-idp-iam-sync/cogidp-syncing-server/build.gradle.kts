@@ -27,6 +27,22 @@ testing {
     }
 }
 
+
+sourceSets {
+    main {
+      proto {
+        // In addition to the default 'src/main/proto'
+        srcDir("../../../proto")
+      }
+    }
+    test {
+      proto {
+        // In addition to the default 'src/test/proto'
+         srcDir("../../../proto")
+      }
+    }
+  }
+
 val protobufVersion = "4.28.3"
 val grpcVersion = "1.68.1"
 val kotlinGrpcVersion = "1.4.1"
